@@ -23,6 +23,10 @@ public final class TollProcessingService {
     private final VehicleRepository vehicleRepository;
     private final TollTransactionRepository transactionRepository;
 
+    // Optional Module 4 extensions
+    private MonthlyPassService monthlyPassService;
+    private ReturnTripService returnTripService;
+
     public TollProcessingService(TollPlazaRepository plazaRepository,
                                  TollRateService rateService,
                                  FASTagAccountRepository accountRepository,
@@ -33,6 +37,14 @@ public final class TollProcessingService {
         this.accountRepository = Objects.requireNonNull(accountRepository, "Account repository is required.");
         this.vehicleRepository = Objects.requireNonNull(vehicleRepository, "Vehicle repository is required.");
         this.transactionRepository = Objects.requireNonNull(transactionRepository, "Transaction repository is required.");
+    }
+
+    public void setMonthlyPassService(MonthlyPassService monthlyPassService) {
+        this.monthlyPassService = monthlyPassService;
+    }
+
+    public void setReturnTripService(ReturnTripService returnTripService) {
+        this.returnTripService = returnTripService;
     }
 
     /**
@@ -130,7 +142,20 @@ public final class TollProcessingService {
                 return duplicate;
             }
 
-            // 4. Rate Calculation & Type Mismatch Check
+            // 4. Monthly Pass Check (Module 4) - Valid pass pays Rs.0
+            if (monthlyPassService != null) {
+                Optional<MonthlyPass> passOpt = monthlyPassService.findValidPass(vehicleReg, plazaId, crossingTime.toLocalDate());
+                if (passOpt.isPresent()) {
+                    TollTransaction passSuccess = new TollTransaction(
+                            vehicleReg, tagId, plazaId, laneNumber, crossingTime, BigDecimal.ZERO,
+                            PaymentMode.FASTAG, TransactionStatus.SUCCESS, registeredType, observedType,
+                            false, "Monthly Pass applied: " + passOpt.get().getPassId(), true);
+                    transactionRepository.save(passSuccess);
+                    return passSuccess;
+                }
+            }
+
+            // 5. Rate Calculation & Type Mismatch Check
             BigDecimal applicableRate;
             boolean flaggedForReview = false;
             String reviewReason = null;
@@ -152,7 +177,16 @@ public final class TollProcessingService {
                 applicableRate = getRate(plaza, observedType, crossingTime);
             }
 
-            // 5. Balance Check & Deduction
+            // 6. Return-Trip Discount Check (Module 4) - 50% discount if returning within 24h
+            if (returnTripService != null && returnTripService.isEligibleForReturnDiscount(vehicleReg, plazaId, crossingTime)) {
+                applicableRate = TollCalculator.applyReturnTripDiscount(applicableRate);
+                reviewReason = (reviewReason != null ? reviewReason + " | " : "") + "50% Return Trip discount applied";
+            }
+
+            // 7. Toll Rounding to nearest Rs.5 (Module 4)
+            applicableRate = TollCalculator.roundToNearestFive(applicableRate);
+
+            // 8. Balance Check & Deduction
             if (account.getBalance().compareTo(applicableRate) < 0) {
                 TollTransaction failed = new TollTransaction(
                         vehicleReg, tagId, plazaId, laneNumber, crossingTime, applicableRate,
@@ -165,6 +199,12 @@ public final class TollProcessingService {
 
             // Deduct balance
             account.deduct(applicableRate);
+
+            // Low-balance alert check (Module 5)
+            Optional<String> lowBalanceAlert = BalanceAlertService.checkLowBalance(account);
+            if (lowBalanceAlert.isPresent()) {
+                reviewReason = (reviewReason != null ? reviewReason + " | " : "") + lowBalanceAlert.get();
+            }
 
             // Barrier opens after successful payment
             TollTransaction success = new TollTransaction(
@@ -181,7 +221,6 @@ public final class TollProcessingService {
 
     /**
      * Process vehicle in a CASH lane.
-     * @param hasInvalidFastagEntry if vehicle was redirected from FASTag lane (requires double toll)
      */
     public TollTransaction processCashCrossing(String plazaId,
                                                int laneNumber,
@@ -229,6 +268,10 @@ public final class TollProcessingService {
                 finalCharge = baseRate.multiply(DOUBLE_TOLL_MULTIPLIER);
                 flagged = true;
                 reviewReason = "Double toll penalty applied: vehicle entered without valid FASTag";
+            } else if (returnTripService != null && returnTripService.isEligibleForReturnDiscount(vehicleRegistrationNumber, plazaId, crossingTime)) {
+                // Return trip discount on normal cash crossing
+                finalCharge = TollCalculator.applyReturnTripDiscount(finalCharge);
+                reviewReason = "50% Return Trip discount applied";
             }
 
             if (registeredType != null && registeredType != observedType) {
@@ -241,6 +284,9 @@ public final class TollProcessingService {
                 reviewReason = (reviewReason != null ? reviewReason + " | " : "")
                         + "Vehicle type mismatch: registered=" + registeredType + ", observed=" + observedType;
             }
+
+            // Apply rounding
+            finalCharge = TollCalculator.roundToNearestFive(finalCharge);
 
             if (cashTendered.compareTo(finalCharge) < 0) {
                 TollTransaction failed = new TollTransaction(

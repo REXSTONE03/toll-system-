@@ -1,10 +1,7 @@
 package tollmanagement;
 
 import tollmanagement.model.*;
-import tollmanagement.repository.FASTagAccountRepository;
-import tollmanagement.repository.TollPlazaRepository;
-import tollmanagement.repository.TollTransactionRepository;
-import tollmanagement.repository.VehicleRepository;
+import tollmanagement.repository.*;
 import tollmanagement.service.*;
 
 import java.math.BigDecimal;
@@ -24,16 +21,31 @@ public final class Main {
         VehicleRepository vehicleRepository = new VehicleRepository();
         FASTagAccountRepository accountRepository = new FASTagAccountRepository();
         TollTransactionRepository transactionRepository = new TollTransactionRepository();
+        MonthlyPassRepository passRepository = new MonthlyPassRepository();
+        RechargeRepository rechargeRepository = new RechargeRepository();
+        DisputeRepository disputeRepository = new DisputeRepository();
+        RefundRepository refundRepository = new RefundRepository();
 
         // Services
         TollRateService rateService = new TollRateService();
         TollPlazaService plazaService = new TollPlazaService(plazaRepository, rateService);
         VehicleService vehicleService = new VehicleService(vehicleRepository);
         FASTagService fastagService = new FASTagService(accountRepository, vehicleRepository);
+
+        MonthlyPassService passService = new MonthlyPassService(passRepository);
+        ReturnTripService returnTripService = new ReturnTripService(transactionRepository);
+
         TollProcessingService processingService = new TollProcessingService(
                 plazaRepository, rateService, accountRepository, vehicleRepository, transactionRepository);
+        processingService.setMonthlyPassService(passService);
+        processingService.setReturnTripService(returnTripService);
 
-        System.out.println("TOLL MANAGEMENT SYSTEM - MODULES 1, 2 & 3");
+        RechargeService rechargeService = new RechargeService(rechargeRepository, accountRepository);
+        DisputeAndRefundService disputeService = new DisputeAndRefundService(
+                disputeRepository, refundRepository, transactionRepository, accountRepository);
+        RevenueReportService reportService = new RevenueReportService(transactionRepository, disputeService);
+
+        System.out.println("TOLL MANAGEMENT SYSTEM - COMPLETE (MODULES 1 TO 5)");
         System.out.println("Demo admin identity: admin (no password authentication configured)");
 
         boolean running = true;
@@ -69,6 +81,18 @@ public final class Main {
                     case "21" -> viewTransactionHistory(processingService);
                     case "22" -> searchTransactionById(processingService);
 
+                    // Module 4 options
+                    case "23" -> createMonthlyPass(admin, passService);
+                    case "24" -> setPassFee(admin, passService);
+                    case "25" -> listMonthlyPasses(passService);
+
+                    // Module 5 options
+                    case "26" -> rechargeWithPaymentMethod(rechargeService);
+                    case "27" -> raiseDispute(disputeService);
+                    case "28" -> reviewDispute(admin, disputeService);
+                    case "29" -> listDisputes(disputeService);
+                    case "30" -> generateDailyRevenueReport(reportService);
+
                     case "0" -> running = false;
                     default -> System.out.println("Invalid option.");
                 }
@@ -95,7 +119,7 @@ public final class Main {
         System.out.println("== Module 2: Vehicles & FASTag Accounts ==");
         System.out.println("10. Register vehicle");
         System.out.println("11. Create FASTag account");
-        System.out.println("12. Recharge FASTag account");
+        System.out.println("12. Recharge FASTag account (direct)");
         System.out.println("13. Block FASTag account");
         System.out.println("14. Blacklist FASTag account");
         System.out.println("15. View vehicle and account details");
@@ -107,6 +131,16 @@ public final class Main {
         System.out.println("20. Process EMERGENCY vehicle crossing");
         System.out.println("21. View transaction history");
         System.out.println("22. Search transaction by ID");
+        System.out.println("== Module 4: Return Trips & Monthly Passes ==");
+        System.out.println("23. Create monthly pass for vehicle");
+        System.out.println("24. Configure monthly pass fee");
+        System.out.println("25. List all monthly passes");
+        System.out.println("== Module 5: Recharge, Disputes, Refunds & Reports ==");
+        System.out.println("26. Recharge with payment gateway (UPI/Card/NetBanking)");
+        System.out.println("27. Raise dispute for transaction (within 7 days)");
+        System.out.println("28. Review dispute (Approve refund / Reject)");
+        System.out.println("29. List all disputes and refund records");
+        System.out.println("30. Generate daily plaza revenue report");
         System.out.println("0. Exit");
     }
 
@@ -116,7 +150,6 @@ public final class Main {
         TollPlaza plaza = service.createPlaza(admin, prompt("Plaza name: "),
                 prompt("Highway name: "), prompt("Location: "));
         System.out.println("Created plaza ID: " + plaza.getId());
-        System.out.println("Add at least 2 lanes and configure all 10 vehicle/trip rate combinations before opening.");
     }
 
     private static void addLane(Admin admin, TollPlazaService service) {
@@ -265,7 +298,7 @@ public final class Main {
         int laneNumber = readInt("Lane number: ");
         String regNumber = prompt("Vehicle registration number: ");
         VehicleType observed = readEnum("Observed vehicle type", VehicleType.class);
-        String redirected = prompt("Was vehicle redirected from FASTag lane? (y/n): ");
+        String redirected = prompt("Was vehicle redirected from FASTag lane without valid tag? (y/n): ");
         boolean isPenalty = "y".equalsIgnoreCase(redirected);
         BigDecimal tendered = new BigDecimal(prompt("Cash amount tendered (Rs.): "));
 
@@ -314,6 +347,89 @@ public final class Main {
                 tx -> System.out.println("Found: " + tx),
                 () -> System.out.println("Transaction not found for ID: " + txId)
         );
+    }
+
+    // ----------------- Module 4 Actions -----------------
+
+    private static void createMonthlyPass(Admin admin, MonthlyPassService service) {
+        String reg = prompt("Vehicle registration number: ");
+        String plazaId = prompt("Plaza ID: ");
+        LocalDate start = LocalDate.parse(prompt("Start date (YYYY-MM-DD): "));
+        LocalDate end = LocalDate.parse(prompt("End date (YYYY-MM-DD): "));
+        MonthlyPass pass = service.createMonthlyPass(admin, reg, plazaId, start, end);
+        System.out.println("Created Monthly Pass: " + pass);
+    }
+
+    private static void setPassFee(Admin admin, MonthlyPassService service) {
+        VehicleType type = readEnum("Vehicle type", VehicleType.class);
+        BigDecimal fee = new BigDecimal(prompt("Monthly pass fee (Rs.): "));
+        service.setPassFee(admin, type, fee);
+        System.out.println("Updated pass fee for " + type + " to Rs." + fee);
+    }
+
+    private static void listMonthlyPasses(MonthlyPassService service) {
+        var list = service.listPasses();
+        if (list.isEmpty()) System.out.println("No monthly passes found.");
+        else list.forEach(System.out::println);
+    }
+
+    // ----------------- Module 5 Actions -----------------
+
+    private static void rechargeWithPaymentMethod(RechargeService service) {
+        String tagId = prompt("FASTag Tag ID: ");
+        BigDecimal amount = new BigDecimal(prompt("Recharge amount (Rs.): "));
+        System.out.println("Select Payment Method:\n1. UPI\n2. Credit/Debit Card\n3. Net Banking");
+        String choice = prompt("Choice (1-3): ");
+        PaymentStrategy strategy = switch (choice) {
+            case "2" -> new CardPaymentStrategy();
+            case "3" -> new NetBankingPaymentStrategy();
+            default -> new UpiPaymentStrategy();
+        };
+
+        RechargeRecord record = service.processRecharge(tagId, amount, strategy, LocalDateTime.now());
+        System.out.println("Recharge Record: " + record);
+        if (record.getStatus() == RechargeStatus.PAID) {
+            System.out.println("Payment SUCCESS! Amount credited.");
+        } else {
+            System.out.println("Payment FAILED. No balance change.");
+        }
+    }
+
+    private static void raiseDispute(DisputeAndRefundService service) {
+        String txId = prompt("Transaction ID to dispute: ");
+        String reason = prompt("Reason for dispute: ");
+        Dispute dispute = service.raiseDispute(txId, reason, LocalDateTime.now());
+        System.out.println("Filed Dispute: " + dispute);
+    }
+
+    private static void reviewDispute(Admin admin, DisputeAndRefundService service) {
+        String dispId = prompt("Dispute ID to review: ");
+        String decision = prompt("Decision (A to Approve / R to Reject): ");
+        String adminReason = prompt("Admin reason/notes: ");
+        if ("A".equalsIgnoreCase(decision)) {
+            RefundRecord refund = service.approveDispute(admin, dispId, adminReason, LocalDateTime.now());
+            System.out.println("Dispute APPROVED. Refund processed: " + refund);
+        } else {
+            service.rejectDispute(admin, dispId, adminReason);
+            System.out.println("Dispute REJECTED.");
+        }
+    }
+
+    private static void listDisputes(DisputeAndRefundService service) {
+        var disputes = service.listAllDisputes();
+        System.out.println("=== DISPUTES (" + disputes.size() + ") ===");
+        disputes.forEach(System.out::println);
+
+        var refunds = service.listAllRefunds();
+        System.out.println("=== REFUND RECORDS (" + refunds.size() + ") ===");
+        refunds.forEach(System.out::println);
+    }
+
+    private static void generateDailyRevenueReport(RevenueReportService service) {
+        String plazaId = prompt("Plaza ID: ");
+        LocalDate date = LocalDate.parse(prompt("Report date (YYYY-MM-DD): "));
+        RevenueReportService.DailyReport report = service.generateDailyReport(plazaId, date);
+        System.out.println(report);
     }
 
     // ----------------- Helpers -----------------
