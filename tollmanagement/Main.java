@@ -3,14 +3,13 @@ package tollmanagement;
 import tollmanagement.model.*;
 import tollmanagement.repository.FASTagAccountRepository;
 import tollmanagement.repository.TollPlazaRepository;
+import tollmanagement.repository.TollTransactionRepository;
 import tollmanagement.repository.VehicleRepository;
-import tollmanagement.service.FASTagService;
-import tollmanagement.service.TollPlazaService;
-import tollmanagement.service.TollRateService;
-import tollmanagement.service.VehicleService;
+import tollmanagement.service.*;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.Comparator;
 import java.util.Scanner;
 
@@ -24,14 +23,17 @@ public final class Main {
         TollPlazaRepository plazaRepository = new TollPlazaRepository();
         VehicleRepository vehicleRepository = new VehicleRepository();
         FASTagAccountRepository accountRepository = new FASTagAccountRepository();
+        TollTransactionRepository transactionRepository = new TollTransactionRepository();
 
         // Services
         TollRateService rateService = new TollRateService();
         TollPlazaService plazaService = new TollPlazaService(plazaRepository, rateService);
         VehicleService vehicleService = new VehicleService(vehicleRepository);
         FASTagService fastagService = new FASTagService(accountRepository, vehicleRepository);
+        TollProcessingService processingService = new TollProcessingService(
+                plazaRepository, rateService, accountRepository, vehicleRepository, transactionRepository);
 
-        System.out.println("TOLL MANAGEMENT SYSTEM - MODULE 1 & 2");
+        System.out.println("TOLL MANAGEMENT SYSTEM - MODULES 1, 2 & 3");
         System.out.println("Demo admin identity: admin (no password authentication configured)");
 
         boolean running = true;
@@ -59,6 +61,13 @@ public final class Main {
                     case "15" -> viewVehicleAndAccount(vehicleService, fastagService);
                     case "16" -> listVehicles(vehicleService);
                     case "17" -> listAccounts(fastagService);
+
+                    // Module 3 options
+                    case "18" -> processFastagCrossing(processingService);
+                    case "19" -> processCashCrossing(processingService);
+                    case "20" -> processEmergencyCrossing(processingService);
+                    case "21" -> viewTransactionHistory(processingService);
+                    case "22" -> searchTransactionById(processingService);
 
                     case "0" -> running = false;
                     default -> System.out.println("Invalid option.");
@@ -92,6 +101,12 @@ public final class Main {
         System.out.println("15. View vehicle and account details");
         System.out.println("16. List all vehicles");
         System.out.println("17. List all FASTag accounts");
+        System.out.println("== Module 3: Toll Processing ==");
+        System.out.println("18. Process FASTAG vehicle crossing");
+        System.out.println("19. Process CASH vehicle crossing");
+        System.out.println("20. Process EMERGENCY vehicle crossing");
+        System.out.println("21. View transaction history");
+        System.out.println("22. Search transaction by ID");
         System.out.println("0. Exit");
     }
 
@@ -225,6 +240,80 @@ public final class Main {
         } else {
             list.forEach(System.out::println);
         }
+    }
+
+    // ----------------- Module 3 Actions -----------------
+
+    private static void processFastagCrossing(TollProcessingService service) {
+        String plazaId = prompt("Plaza ID: ");
+        int laneNumber = readInt("Lane number: ");
+        String tagId = prompt("FASTag Tag ID: ");
+        VehicleType observed = readEnum("Observed vehicle type", VehicleType.class);
+
+        System.out.println("Processing FASTag crossing...");
+        TollTransaction tx = service.processFastagCrossing(plazaId, laneNumber, tagId, observed, LocalDateTime.now());
+        System.out.println("RESULT: " + tx);
+        if (tx.isBarrierOpened()) {
+            System.out.println(">>> BARRIER OPENED: Vehicle cleared to pass. <<<");
+        } else {
+            System.out.println(">>> BARRIER REMAINED CLOSED: " + tx.getStatus() + " <<<");
+        }
+    }
+
+    private static void processCashCrossing(TollProcessingService service) {
+        String plazaId = prompt("Plaza ID: ");
+        int laneNumber = readInt("Lane number: ");
+        String regNumber = prompt("Vehicle registration number: ");
+        VehicleType observed = readEnum("Observed vehicle type", VehicleType.class);
+        String redirected = prompt("Was vehicle redirected from FASTag lane? (y/n): ");
+        boolean isPenalty = "y".equalsIgnoreCase(redirected);
+        BigDecimal tendered = new BigDecimal(prompt("Cash amount tendered (Rs.): "));
+
+        System.out.println("Processing Cash crossing...");
+        TollTransaction tx = service.processCashCrossing(plazaId, laneNumber, regNumber, observed, isPenalty, tendered, LocalDateTime.now());
+        System.out.println("RESULT: " + tx);
+        if (tx.isBarrierOpened()) {
+            System.out.println(">>> BARRIER OPENED: Cash received. Vehicle cleared to pass. <<<");
+        } else {
+            System.out.println(">>> BARRIER REMAINED CLOSED: " + tx.getStatus() + " <<<");
+        }
+    }
+
+    private static void processEmergencyCrossing(TollProcessingService service) {
+        String plazaId = prompt("Plaza ID: ");
+        int laneNumber = readInt("Lane number: ");
+        String regNumber = prompt("Vehicle registration number: ");
+        VehicleType observed = readEnum("Observed vehicle type", VehicleType.class);
+        String authStr = prompt("Is this an authorized emergency vehicle (e.g. Ambulance/Fire)? (y/n): ");
+        boolean isAuth = "y".equalsIgnoreCase(authStr);
+        String details = prompt("Emergency service details / mission description: ");
+
+        System.out.println("Processing Emergency crossing...");
+        TollTransaction tx = service.processEmergencyCrossing(plazaId, laneNumber, regNumber, observed, isAuth, details, LocalDateTime.now());
+        System.out.println("RESULT: " + tx);
+        if (tx.isBarrierOpened()) {
+            System.out.println(">>> BARRIER OPENED: Emergency vehicle exempted (Rs.0.00). Cleared to pass. <<<");
+        } else {
+            System.out.println(">>> BARRIER REMAINED CLOSED: " + tx.getStatus() + " <<<");
+        }
+    }
+
+    private static void viewTransactionHistory(TollProcessingService service) {
+        var list = service.getTransactionHistory();
+        if (list.isEmpty()) {
+            System.out.println("No transactions recorded.");
+        } else {
+            System.out.println("=== TRANSACTION LOG (" + list.size() + " records) ===");
+            list.forEach(System.out::println);
+        }
+    }
+
+    private static void searchTransactionById(TollProcessingService service) {
+        String txId = prompt("Transaction ID: ");
+        service.getTransactionById(txId).ifPresentOrElse(
+                tx -> System.out.println("Found: " + tx),
+                () -> System.out.println("Transaction not found for ID: " + txId)
+        );
     }
 
     // ----------------- Helpers -----------------
