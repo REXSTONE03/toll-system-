@@ -1,9 +1,14 @@
 package tollmanagement;
 
 import tollmanagement.model.*;
+import tollmanagement.repository.FASTagAccountRepository;
 import tollmanagement.repository.TollPlazaRepository;
+import tollmanagement.repository.VehicleRepository;
+import tollmanagement.service.FASTagService;
 import tollmanagement.service.TollPlazaService;
 import tollmanagement.service.TollRateService;
+import tollmanagement.service.VehicleService;
+
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Comparator;
@@ -11,18 +16,30 @@ import java.util.Scanner;
 
 public final class Main {
     private static final Scanner SCANNER = new Scanner(System.in);
+
     public static void main(String[] args) {
         Admin admin = new Admin("admin");
-        TollPlazaRepository repository = new TollPlazaRepository();
+
+        // Repositories
+        TollPlazaRepository plazaRepository = new TollPlazaRepository();
+        VehicleRepository vehicleRepository = new VehicleRepository();
+        FASTagAccountRepository accountRepository = new FASTagAccountRepository();
+
+        // Services
         TollRateService rateService = new TollRateService();
-        TollPlazaService plazaService = new TollPlazaService(repository, rateService);
-        System.out.println("TOLL MANAGEMENT SYSTEM - MODULE 1: Toll Plaza and Lane Setup");
+        TollPlazaService plazaService = new TollPlazaService(plazaRepository, rateService);
+        VehicleService vehicleService = new VehicleService(vehicleRepository);
+        FASTagService fastagService = new FASTagService(accountRepository, vehicleRepository);
+
+        System.out.println("TOLL MANAGEMENT SYSTEM - MODULE 1 & 2");
         System.out.println("Demo admin identity: admin (no password authentication configured)");
+
         boolean running = true;
         while (running) {
             printMenu();
             try {
                 switch (prompt("Choose an option: ")) {
+                    // Module 1 options
                     case "1" -> createPlaza(admin, plazaService);
                     case "2" -> addLane(admin, plazaService);
                     case "3" -> openLane(admin, plazaService);
@@ -32,6 +49,17 @@ public final class Main {
                     case "7" -> listPlazas(plazaService);
                     case "8" -> listRates(plazaService, rateService);
                     case "9" -> simulateProcessing(plazaService);
+
+                    // Module 2 options
+                    case "10" -> registerVehicle(admin, vehicleService);
+                    case "11" -> createFASTagAccount(admin, fastagService);
+                    case "12" -> rechargeAccount(admin, fastagService);
+                    case "13" -> blockAccount(admin, fastagService);
+                    case "14" -> blacklistAccount(admin, fastagService);
+                    case "15" -> viewVehicleAndAccount(vehicleService, fastagService);
+                    case "16" -> listVehicles(vehicleService);
+                    case "17" -> listAccounts(fastagService);
+
                     case "0" -> running = false;
                     default -> System.out.println("Invalid option.");
                 }
@@ -40,10 +68,12 @@ public final class Main {
             }
             System.out.println();
         }
-        System.out.println("Module 1 closed. Goodbye!");
+        System.out.println("System closed. Goodbye!");
     }
+
     private static void printMenu() {
-        System.out.println("\n--- ADMIN MENU ---");
+        System.out.println("\n--- MAIN MENU ---");
+        System.out.println("== Module 1: Toll Plaza & Lanes ==");
         System.out.println("1. Create toll plaza");
         System.out.println("2. Add lane to plaza");
         System.out.println("3. Open lane");
@@ -53,27 +83,43 @@ public final class Main {
         System.out.println("7. List toll plazas and lanes");
         System.out.println("8. List rates for a plaza");
         System.out.println("9. Simulate vehicle processing");
+        System.out.println("== Module 2: Vehicles & FASTag Accounts ==");
+        System.out.println("10. Register vehicle");
+        System.out.println("11. Create FASTag account");
+        System.out.println("12. Recharge FASTag account");
+        System.out.println("13. Block FASTag account");
+        System.out.println("14. Blacklist FASTag account");
+        System.out.println("15. View vehicle and account details");
+        System.out.println("16. List all vehicles");
+        System.out.println("17. List all FASTag accounts");
         System.out.println("0. Exit");
     }
+
+    // ----------------- Module 1 Actions -----------------
+
     private static void createPlaza(Admin admin, TollPlazaService service) {
         TollPlaza plaza = service.createPlaza(admin, prompt("Plaza name: "),
-            prompt("Highway name: "), prompt("Location: "));
+                prompt("Highway name: "), prompt("Location: "));
         System.out.println("Created plaza ID: " + plaza.getId());
         System.out.println("Add at least 2 lanes and configure all 10 vehicle/trip rate combinations before opening.");
     }
+
     private static void addLane(Admin admin, TollPlazaService service) {
         Lane lane = service.addLane(admin, prompt("Plaza ID: "), readInt("Lane number: "),
-            readEnum("Lane type", LaneType.class));
+                readEnum("Lane type", LaneType.class));
         System.out.println("Added: " + lane);
     }
+
     private static void openLane(Admin admin, TollPlazaService service) {
         service.openLane(admin, prompt("Plaza ID: "), readInt("Lane number: "));
         System.out.println("Lane opened.");
     }
+
     private static void closeLane(Admin admin, TollPlazaService service) {
         service.closeLane(admin, prompt("Plaza ID: "), readInt("Lane number: "));
         System.out.println("Lane closed.");
     }
+
     private static void setRate(Admin admin, TollPlazaService plazaService, TollRateService rateService) {
         TollPlaza plaza = plazaService.getPlaza(prompt("Plaza ID: "));
         VehicleType vehicle = readEnum("Vehicle type", VehicleType.class);
@@ -82,10 +128,12 @@ public final class Main {
         LocalDate date = LocalDate.parse(prompt("Effective date (YYYY-MM-DD): "));
         System.out.println("Saved rate: " + rateService.setRate(admin, plaza, vehicle, trip, amount, date));
     }
+
     private static void openPlaza(Admin admin, TollPlazaService service) {
         service.openPlaza(admin, prompt("Plaza ID: "), LocalDate.parse(prompt("Opening/evaluation date (YYYY-MM-DD): ")));
         System.out.println("Toll plaza opened successfully.");
     }
+
     private static void listPlazas(TollPlazaService service) {
         if (service.listPlazas().isEmpty()) { System.out.println("No plazas created."); return; }
         for (TollPlaza plaza : service.listPlazas()) {
@@ -93,14 +141,16 @@ public final class Main {
             plaza.getLanes().forEach(lane -> System.out.println("  " + lane));
         }
     }
+
     private static void listRates(TollPlazaService service, TollRateService rates) {
         TollPlaza plaza = service.getPlaza(prompt("Plaza ID: "));
         var list = rates.getRates(plaza);
         if (list.isEmpty()) System.out.println("No rates configured.");
         else list.stream().sorted(Comparator.comparing(TollRate::getVehicleType)
-            .thenComparing(TollRate::getTripType).thenComparing(TollRate::getEffectiveDate))
-            .forEach(System.out::println);
+                .thenComparing(TollRate::getTripType).thenComparing(TollRate::getEffectiveDate))
+                .forEach(System.out::println);
     }
+
     private static void simulateProcessing(TollPlazaService service) {
         String id = prompt("Plaza ID: ");
         int lane = readInt("Lane number: ");
@@ -110,6 +160,75 @@ public final class Main {
         service.finishVehicleProcessing(id, lane);
         System.out.println("Processing finished.");
     }
+
+    // ----------------- Module 2 Actions -----------------
+
+    private static void registerVehicle(Admin admin, VehicleService service) {
+        String reg = prompt("Vehicle registration number (e.g., KA01AB1234): ");
+        String owner = prompt("Owner name: ");
+        String phone = prompt("Phone number: ");
+        VehicleType type = readEnum("Vehicle type", VehicleType.class);
+        Vehicle vehicle = service.registerVehicle(admin, reg, owner, phone, type);
+        System.out.println("Registered vehicle: " + vehicle);
+    }
+
+    private static void createFASTagAccount(Admin admin, FASTagService service) {
+        String tagId = prompt("Tag ID (e.g., TAG1001): ");
+        String reg = prompt("Vehicle registration number: ");
+        BigDecimal balance = new BigDecimal(prompt("Initial balance (Rs.): "));
+        FASTagAccount account = service.createAccount(admin, tagId, reg, balance);
+        System.out.println("Created FASTag account: " + account);
+    }
+
+    private static void rechargeAccount(Admin admin, FASTagService service) {
+        String tagId = prompt("Tag ID: ");
+        BigDecimal amount = new BigDecimal(prompt("Recharge amount (Rs.): "));
+        FASTagAccount account = service.recharge(admin, tagId, amount);
+        System.out.println("Recharge successful! " + account);
+    }
+
+    private static void blockAccount(Admin admin, FASTagService service) {
+        String tagId = prompt("Tag ID: ");
+        service.blockAccount(admin, tagId);
+        System.out.println("Account blocked successfully.");
+    }
+
+    private static void blacklistAccount(Admin admin, FASTagService service) {
+        String tagId = prompt("Tag ID: ");
+        service.blacklistAccount(admin, tagId);
+        System.out.println("Account blacklisted successfully.");
+    }
+
+    private static void viewVehicleAndAccount(VehicleService vehicleService, FASTagService fastagService) {
+        String reg = prompt("Vehicle registration number: ");
+        Vehicle vehicle = vehicleService.getVehicle(reg);
+        System.out.println(vehicle);
+        fastagService.findAccountByVehicle(reg).ifPresentOrElse(
+                acc -> System.out.println("Linked FASTag: " + acc),
+                () -> System.out.println("No FASTag account linked to this vehicle.")
+        );
+    }
+
+    private static void listVehicles(VehicleService service) {
+        var list = service.listVehicles();
+        if (list.isEmpty()) {
+            System.out.println("No vehicles registered.");
+        } else {
+            list.forEach(System.out::println);
+        }
+    }
+
+    private static void listAccounts(FASTagService service) {
+        var list = service.listAccounts();
+        if (list.isEmpty()) {
+            System.out.println("No FASTag accounts found.");
+        } else {
+            list.forEach(System.out::println);
+        }
+    }
+
+    // ----------------- Helpers -----------------
+
     private static String prompt(String text) { System.out.print(text); return SCANNER.nextLine().trim(); }
     private static int readInt(String label) {
         try { return Integer.parseInt(prompt(label)); }
